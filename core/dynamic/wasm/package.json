@@ -1,0 +1,34 @@
+{
+  "name": "@boa-dev/dynamic",
+  "version": "0.20.0",
+  "description": "WASM bindings for Boa's dynamic runtime interop capabilities",
+  "main": "pkg/boa_dynamic_wasm.js",
+  "types": "pkg/boa_dynamic_wasm.d.ts",
+  "files": [
+    "pkg/boa_dynamic_wasm_bg.wasm",
+    "pkg/boa_dynamic_wasm.js",
+    "pkg/boa_dynamic_wasm_bg.js",
+    "pkg/boa_dynamic_wasm.d.ts"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target web",
+    "test": "wasm-pack test --node"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/boa-dev/boa"
+  },
+  "keywords": [
+    "javascript",
+    "engine",
+    "runtime",
+    "wasm",
+    "boa"
+  ],
+  "author": "boa-dev",
+  "license": "(Unlicense OR MIT)",
+  "bugs": {
+    "url": "https://github.com/boa-dev/boa/issues"
+  },
+  "homepage": "https://boajs.dev"
+}

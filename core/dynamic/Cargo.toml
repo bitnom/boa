@@ -1,0 +1,24 @@
+[package]
+name = "boa_dynamic"
+version = "0.20.0"
+authors = ["boa-dev"]
+description = "Dynamic runtime interop capabilities for the Boa JavaScript engine"
+repository = "https://github.com/boa-dev/boa"
+homepage = "https://boajs.dev"
+license = "Unlicense OR MIT"
+edition = "2021"
+rust-version = "1.70"
+
+[dependencies]
+boa_engine = { version = "0.20", path = "../engine" }
+boa_gc = { version = "0.20", path = "../gc" }
+boa_ast = { version = "0.20", path = "../ast" }
+boa_parser = { version = "0.20", path = "../parser" }
+boa_runtime = { version = "0.20", path = "../runtime" }
+boa_interop = { version = "0.20", path = "../interop" }
+futures = "0.3"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }
