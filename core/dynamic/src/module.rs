@@ -1,17 +1,28 @@
-use crate::{DynamicContext, Error, Result};
-use boa_engine::{Context, JsResult, JsValue, Module, NativeFunction};
-use boa_gc::{Finalize, Trace};
+use crate::{DynamicContext, Error, Result, convert_js_error};
+use boa_engine::{Context, JsValue, Module, NativeFunction, Source};
+use boa_gc::{Finalize, Trace, GcRef};
 use std::sync::Arc;
 
 /// A dynamic module that can be loaded at runtime.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DynamicModule {
     /// The module's name/specifier
     name: String,
     /// The module's source code
     source: String,
     /// Native functions exposed by this module
-    native_functions: Vec<(String, NativeFunction)>,
+    native_functions: Arc<Vec<(String, NativeFunction)>>,
+}
+
+unsafe impl Finalize for DynamicModule {}
+
+unsafe impl Trace for DynamicModule {
+    fn trace(&self, visitor: &mut boa_gc::Visitor) {
+        // Trace native functions
+        for (_, func) in self.native_functions.iter() {
+            func.trace(visitor);
+        }
+    }
 }
 
 impl DynamicModule {
@@ -20,13 +31,16 @@ impl DynamicModule {
         Self {
             name: name.into(),
             source: source.into(),
-            native_functions: Vec::new(),
+            native_functions: Arc::new(Vec::new()),
         }
     }
 
     /// Add a native function to the module
     pub fn add_native_function(&mut self, name: impl Into<String>, func: NativeFunction) {
-        self.native_functions.push((name.into(), func));
+        // Clone the Arc and create a new Vec with the additional function
+        let mut functions = (*self.native_functions).clone();
+        functions.push((name.into(), func));
+        self.native_functions = Arc::new(functions);
     }
 
     /// Get the module's name
@@ -43,6 +57,24 @@ impl DynamicModule {
     pub fn native_functions(&self) -> &[(String, NativeFunction)] {
         &self.native_functions
     }
+
+    /// Initialize the module in a context
+    pub fn initialize(&self, context: &mut Context) -> Result<Module> {
+        // Parse module source
+        let source = Source::from_bytes(&self.source);
+        let module = convert_js_error(Module::parse(source, context))?;
+
+        // Register native functions
+        for (name, func) in self.native_functions.iter() {
+            convert_js_error(module.set_native_function(name, func.clone(), context))?;
+        }
+
+        // Initialize module
+        convert_js_error(module.initialize_module(context))
+            .map_err(|e| Error::ModuleInit(format!("Failed to initialize module '{}': {}", self.name, e)))?;
+
+        Ok(module)
+    }
 }
 
 /// A trait for types that can be converted into a dynamic module.
@@ -53,16 +85,10 @@ pub trait IntoDynamicModule {
 
 impl IntoDynamicModule for DynamicModule {
     fn register(&self, context: &mut DynamicContext) -> Result<()> {
-        // First register any native functions
-        for (name, func) in &self.native_functions {
-            context
-                .inner_mut()
-                .register_global_function(name, func.clone())
-                .map_err(|e| Error::ModuleRegistration(e.to_string()))?;
-        }
+        // Initialize the module
+        let module = self.initialize(context.inner_mut())?;
 
-        // Then evaluate the module's source code
-        context.evaluate(&self.source)?;
-        Ok(())
+        // Register it with the registry
+        context.registry.register(self.clone())
     }
 }
