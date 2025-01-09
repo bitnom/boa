@@ -23,41 +23,36 @@ impl ModuleResolver {
 
     /// Resolve a module specifier to a canonical path
     pub fn resolve(&self, specifier: &str, parent_specifier: Option<&str>) -> Result<String> {
-        // Normalize path separators
-        let specifier = specifier.replace('\\', "/");
-
-        // If it's a relative path and we have a parent module
-        if specifier.starts_with("./") || specifier.starts_with("../") {
-            if let Some(parent) = parent_specifier {
-                let parent_path = Path::new(&parent.replace('\\', "/"));
-                if let Some(parent_dir) = parent_path.parent() {
-                    let resolved = parent_dir.join(&specifier);
-                    match resolved.canonicalize() {
-                        Ok(canonical) => return Ok(canonical.to_string_lossy()
-                            .replace('\\', "/")
-                            .into_owned()),
-                        Err(e) => return Err(Error::PathResolution {
-                            path: specifier,
-                            reason: e.to_string(),
-                        }),
-                    }
-                }
-            }
-            return Err(Error::ModuleNotFound {
-                name: specifier.to_string(),
-                available_modules: Vec::new(),
-                reason: Some("No parent module for relative import".to_string()),
+        // Validate input
+        if specifier.is_empty() {
+            return Err(Error::ModuleResolution {
+                specifier: specifier.to_string(),
+                reason: "Empty module specifier".to_string(),
             });
         }
 
-        // Try each base path
+        // Normalize path separators for the current platform
+        let specifier = if cfg!(windows) {
+            specifier.replace('/', "\\")
+        } else {
+            specifier.replace('\\', "/")
+        };
+
+        // Handle relative paths
+        if Self::is_relative(&specifier) {
+            return self.resolve_relative(&specifier, parent_specifier);
+        }
+
+        // Try each base path for absolute paths
+        if Path::new(&specifier).is_absolute() {
+            return self.resolve_absolute(&specifier);
+        }
+
         let mut tried_paths = Vec::new();
         for base in &self.base_paths {
             let path = base.join(&specifier);
-            match path.canonicalize() {
-                Ok(canonical) => return Ok(canonical.to_string_lossy()
-                    .replace('\\', "/")
-                    .into_owned()),
+            match self.canonicalize_path(&path) {
+                Ok(canonical) => return Ok(canonical),
                 Err(_) => tried_paths.push(path),
             }
         }
@@ -75,6 +70,47 @@ impl ModuleResolver {
         Ok(specifier.to_string())
     }
 
+    /// Resolve a relative path
+    fn resolve_relative(&self, specifier: &str, parent_specifier: Option<&str>) -> Result<String> {
+        let parent = parent_specifier.ok_or_else(|| Error::ModuleResolution {
+            specifier: specifier.to_string(),
+            reason: "No parent module for relative import".to_string(),
+        })?;
+
+        let parent_path = Path::new(parent);
+        let parent_dir = parent_path.parent().ok_or_else(|| Error::ModuleResolution {
+            specifier: specifier.to_string(),
+            reason: "Invalid parent path".to_string(),
+        })?;
+
+        let resolved = parent_dir.join(specifier);
+        self.canonicalize_path(&resolved)
+    }
+
+    /// Resolve an absolute path
+    fn resolve_absolute(&self, specifier: &str) -> Result<String> {
+        let path = Path::new(specifier);
+        self.canonicalize_path(path)
+    }
+
+    /// Canonicalize a path with proper error handling
+    fn canonicalize_path<P: AsRef<Path>>(&self, path: P) -> Result<String> {
+        path.as_ref()
+            .canonicalize()
+            .map_err(|e| Error::PathResolution {
+                path: path.as_ref().to_string_lossy().into_owned(),
+                reason: e.to_string(),
+            })
+            .map(|p| {
+                if cfg!(windows) {
+                    p.to_string_lossy().replace('/', "\\")
+                } else {
+                    p.to_string_lossy().replace('\\', "/")
+                }
+                .into_owned()
+            })
+    }
+
     /// Check if a module specifier is relative
     pub fn is_relative(specifier: &str) -> bool {
         specifier.starts_with("./") || specifier.starts_with("../")
@@ -82,8 +118,19 @@ impl ModuleResolver {
 
     /// Get the parent directory of a module specifier
     pub fn get_parent_dir(specifier: &str) -> Option<String> {
+        if specifier.is_empty() {
+            return None;
+        }
+
         let path = Path::new(specifier);
-        path.parent().map(|p| p.to_string_lossy().into_owned())
+        path.parent().map(|p| {
+            if cfg!(windows) {
+                p.to_string_lossy().replace('/', "\\")
+            } else {
+                p.to_string_lossy().replace('\\', "/")
+            }
+            .into_owned()
+        })
     }
 }
 

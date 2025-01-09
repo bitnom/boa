@@ -87,15 +87,36 @@ impl DynamicContext {
         // Mark module as loading with parent information
         self.registry.mark_loading(specifier, current_module.as_deref())?;
 
+        // Create a guard that will unmark the module as loading when dropped
+        struct LoadingGuard<'a> {
+            registry: &'a ModuleRegistry,
+            specifier: String,
+        }
+
+        impl<'a> Drop for LoadingGuard<'a> {
+            fn drop(&mut self) {
+                let _ = self.registry.unmark_loading(&self.specifier);
+            }
+        }
+
+        let _guard = LoadingGuard {
+            registry: &self.registry,
+            specifier: specifier.to_string(),
+        };
+
+        // Load the module
         let result = self.registry.load_module(specifier, &mut self.inner).await;
 
-        // Always unmark module as loading, even in error case
-        let _ = self.registry.unmark_loading(specifier);
-
-        // Cache successful result
-        if let Ok(ref module) = result {
-            if let Ok(mut cache) = self.module_cache.write() {
-                cache.insert(specifier.to_string(), module.clone());
+        match &result {
+            Ok(module) => {
+                // Cache successful result
+                if let Ok(mut cache) = self.module_cache.write() {
+                    cache.insert(specifier.to_string(), module.clone());
+                }
+            }
+            Err(e) => {
+                // Log error details for debugging
+                eprintln!("Failed to load module '{}': {}", specifier, e);
             }
         }
 
@@ -107,14 +128,17 @@ impl DynamicContext {
         self.load_module(specifier).await
     }
 
-    /// Clear the module cache
+    /// Clear the module cache and invalidate loaded modules
     pub fn clear_cache(&mut self) -> Result<()> {
+        // Clear the module cache
         if let Ok(mut cache) = self.module_cache.write() {
             cache.clear();
-            Ok(())
-        } else {
-            Err(Error::ConcurrentModification("Failed to acquire cache write lock".to_string()))
         }
+
+        // Clear the registry
+        self.registry.clear()?;
+
+        Ok(())
     }
 
     /// Evaluate JavaScript code with access to dynamic modules

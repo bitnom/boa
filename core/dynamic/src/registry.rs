@@ -39,36 +39,27 @@ impl ModuleRegistry {
 
     /// Load a module by its specifier
     pub async fn load_module(&self, specifier: &str, context: &mut Context) -> Result<Module> {
-        // Get the current module from the loading chain (if any)
-        let parent_module = if let Ok(loading) = self.loading.read() {
-            loading.iter()
-                .find(|(_, parent)| parent.is_none())
-                .map(|(name, _)| name.clone())
-        } else {
-            None
-        };
-
-        // Resolve the module specifier
-        let resolved_specifier = self.resolver.resolve(specifier, parent_module.as_deref())
-            .map_err(|e| Error::ModuleResolution {
-                name: specifier.to_string(),
-                reason: e.to_string(),
-            })?;
-
-        // Get the module while holding read lock
+        // Use a read lock to check if module exists
         let module = {
             let modules = convert_lock_error(self.modules.read())?;
-            modules.get(&resolved_specifier)
-                .or_else(|| modules.get(specifier))
-                .ok_or_else(|| Error::ModuleNotFound {
-                    name: specifier.to_string(),
-                    available_modules: modules.keys().cloned().collect(),
-                    resolved_path: Some(resolved_specifier),
-                })?
-                .clone()
+            
+            // First try exact match
+            if let Some(module) = modules.get(specifier) {
+                module.clone()
+            } else {
+                // Then try resolving the specifier
+                let resolved_specifier = self.resolver.resolve(specifier, None)?;
+                modules.get(&resolved_specifier)
+                    .ok_or_else(|| Error::ModuleNotFound {
+                        name: specifier.to_string(),
+                        available_modules: modules.keys().cloned().collect(),
+                        resolved_path: Some(resolved_specifier),
+                    })?
+                    .clone()
+            }
         };
 
-        // Initialize the module (no locks held)
+        // Initialize the module outside of any locks
         module.initialize_async(context).await
             .map_err(|e| Error::ModuleLoading {
                 name: specifier.to_string(),
@@ -97,14 +88,20 @@ impl ModuleRegistry {
     pub fn get_loading_chain(&self, specifier: &str) -> Result<Vec<String>> {
         let loading = convert_lock_error(self.loading.read())?;
         let mut chain = Vec::new();
+        let mut visited = HashSet::new();
         let mut current = Some(specifier.to_string());
 
         while let Some(module) = current {
+            if !visited.insert(module.clone()) {
+                return Err(Error::CircularDependency {
+                    dependency_chain: chain,
+                });
+            }
+
             chain.push(module.clone());
             current = loading.get(&module).and_then(|parent| parent.clone());
         }
 
-        chain.reverse();
         Ok(chain)
     }
 
@@ -152,22 +149,23 @@ impl ModuleRegistry {
 
         while let Some(module) = current {
             if !visited.insert(module.clone()) {
-                // Found a cycle - construct the dependency chain
-                let mut chain = Vec::new();
-                let mut curr = Some(specifier.to_string());
-                while let Some(m) = curr {
-                    chain.push(m.clone());
-                    if m == module {
+                let mut chain = visited.into_iter().collect::<Vec<_>>();
+                // Rotate chain so the cycle starts at the repeated module
+                while let Some(first) = chain.first() {
+                    if first != &module {
+                        chain.rotate_left(1);
+                    } else {
                         break;
                     }
-                    curr = loading.get(&m).and_then(|parent| parent.clone());
                 }
                 return Err(Error::CircularDependency {
                     dependency_chain: chain,
                 });
             }
+
             current = loading.get(&module).and_then(|parent| parent.clone());
         }
+
         Ok(())
     }
 }
