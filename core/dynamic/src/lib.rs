@@ -15,11 +15,17 @@ mod registry;
 mod resolver;
 mod value;
 
+#[cfg(feature = "wasm")]
+mod wasm;
+
 pub use context::DynamicContext;
 pub use module::{DynamicModule, IntoDynamicModule};
 pub use registry::ModuleRegistry;
 pub use resolver::ModuleResolver;
 pub use value::DynamicValue;
+
+#[cfg(feature = "wasm")]
+pub use wasm::*;
 
 /// Errors that can occur during dynamic operations.
 #[derive(Debug, Error)]
