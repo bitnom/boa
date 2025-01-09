@@ -57,7 +57,7 @@ impl DynamicContext {
         })
     }
 
-    /// Load a module at runtime with caching
+    /// Load a module at runtime with caching and dependency tracking
     pub async fn load_module(&mut self, specifier: &str) -> Result<Module> {
         // Check cache first
         if let Ok(cache) = self.module_cache.read() {
@@ -67,16 +67,17 @@ impl DynamicContext {
         }
 
         // Check for circular dependencies
-        if self.registry.is_loading(specifier) {
-            let mut chain = self.registry.get_loading_chain(specifier)?;
-            chain.push(specifier.to_string());
-            return Err(Error::CircularDependency {
-                dependency_chain: chain,
-            });
-        }
+        self.registry.check_circular_dependencies(specifier)?;
 
-        // Mark module as loading
-        self.registry.mark_loading(specifier)?;
+        // Get the current module from the loading chain (if any)
+        let current_module = if let Ok(loading) = self.registry.get_loading_chain(specifier) {
+            loading.last().cloned()
+        } else {
+            None
+        };
+
+        // Mark module as loading with parent information
+        self.registry.mark_loading(specifier, current_module.as_deref())?;
 
         let result = self.registry.load_module(specifier, &mut self.inner).await;
 
