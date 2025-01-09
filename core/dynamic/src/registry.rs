@@ -1,4 +1,5 @@
 use crate::{DynamicModule, Error, Result, convert_lock_error};
+use crate::resolver::ModuleResolver;
 use boa_engine::{Context, Module};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
@@ -10,6 +11,8 @@ pub struct ModuleRegistry {
     modules: Arc<RwLock<HashMap<String, DynamicModule>>>,
     /// Map of modules currently being loaded to their parent modules (for dependency chain tracking)
     loading: Arc<RwLock<HashMap<String, Option<String>>>>,
+    /// Module resolver for handling relative imports
+    resolver: ModuleResolver,
 }
 
 impl ModuleRegistry {
@@ -18,7 +21,13 @@ impl ModuleRegistry {
         Self {
             modules: Arc::new(RwLock::new(HashMap::new())),
             loading: Arc::new(RwLock::new(HashMap::new())),
+            resolver: ModuleResolver::new(),
         }
+    }
+
+    /// Add a base path for module resolution
+    pub fn add_base_path<P: AsRef<std::path::Path>>(&mut self, path: P) {
+        self.resolver.add_base_path(path);
     }
 
     /// Register a module
@@ -30,10 +39,23 @@ impl ModuleRegistry {
 
     /// Load a module by its specifier
     pub async fn load_module(&self, specifier: &str, context: &mut Context) -> Result<Module> {
+        // Get the current module from the loading chain (if any)
+        let parent_module = if let Ok(loading) = self.loading.read() {
+            loading.iter()
+                .find(|(_, parent)| parent.is_none())
+                .map(|(name, _)| name.clone())
+        } else {
+            None
+        };
+
+        // Resolve the module specifier
+        let resolved_specifier = self.resolver.resolve(specifier, parent_module.as_deref())?;
+
         // Get the module while holding read lock
         let module = {
             let modules = convert_lock_error(self.modules.read())?;
-            modules.get(specifier)
+            modules.get(&resolved_specifier)
+                .or_else(|| modules.get(specifier))
                 .ok_or_else(|| Error::ModuleNotFound {
                     name: specifier.to_string(),
                     available_modules: modules.keys().cloned().collect(),

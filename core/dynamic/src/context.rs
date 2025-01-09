@@ -4,6 +4,7 @@ use boa_gc::{Finalize, Trace};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use futures::Future;
+use std::path::Path;
 
 /// An extended context that supports dynamic module loading and native function registration.
 #[derive(Debug, Clone)]
@@ -94,6 +95,11 @@ impl DynamicContext {
         result
     }
 
+    /// Import a module using a relative or absolute specifier
+    pub async fn import(&mut self, specifier: &str) -> Result<Module> {
+        self.load_module(specifier).await
+    }
+
     /// Clear the module cache
     pub fn clear_cache(&mut self) -> Result<()> {
         if let Ok(mut cache) = self.module_cache.write() {
@@ -118,6 +124,11 @@ impl DynamicContext {
     /// Get a mutable reference to the inner context
     pub fn inner_mut(&mut self) -> &mut Context {
         &mut self.inner
+    }
+
+    /// Add a base path for module resolution
+    pub fn add_base_path<P: AsRef<Path>>(&mut self, path: P) {
+        self.registry.add_base_path(path);
     }
 }
 

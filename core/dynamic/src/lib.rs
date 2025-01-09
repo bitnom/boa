@@ -12,11 +12,13 @@ use std::collections::HashSet;
 mod context;
 mod module;
 mod registry;
+mod resolver;
 mod value;
 
 pub use context::DynamicContext;
 pub use module::{DynamicModule, IntoDynamicModule};
 pub use registry::ModuleRegistry;
+pub use resolver::ModuleResolver;
 pub use value::DynamicValue;
 
 /// Errors that can occur during dynamic operations.
@@ -69,6 +71,13 @@ pub enum Error {
     ModuleNotFound {
         name: String,
         available_modules: Vec<String>,
+    },
+
+    /// Module resolution error
+    #[error("Failed to resolve module '{specifier}': {reason}")]
+    ModuleResolution {
+        specifier: String,
+        reason: String,
     },
 
     /// Concurrent modification error

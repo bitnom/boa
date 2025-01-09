@@ -16,23 +16,28 @@ import { DynamicRuntime } from "@boa-dev/dynamic";
 // Create a new runtime
 const runtime = new DynamicRuntime();
 
-// Register a module
-await runtime.registerModule("my-module", `
-  export function hello() {
-    return "Hello from dynamic module!";
+// Add base paths for module resolution
+runtime.addBasePath("/path/to/modules");
+
+// Register modules with relative paths
+await runtime.registerModule("math", `
+  export function add(a, b) {
+    return a + b;
   }
 `);
 
-// Register a native JavaScript function
-runtime.registerNativeFunction("my-module", "nativeHello", () => {
-  return "Hello from native function!";
-});
+await runtime.registerModule("./utils/format", `
+  export function format(num) {
+    return \`Result: \${num}\`;
+  }
+`);
 
-// Use the module
+// Use modules with relative imports
 const result = runtime.evaluate(`
-  import { hello, nativeHello } from 'my-module';
-  console.log(hello());        // "Hello from dynamic module!"
-  console.log(nativeHello());  // "Hello from native function!"
+  import { add } from 'math';
+  import { format } from './utils/format';
+  
+  format(add(1, 2));  // "Result: 3"
 `);
 ```
 
@@ -48,17 +53,33 @@ The main class for interacting with Boa's dynamic capabilities.
 
 #### Methods
 
-- `registerModule(name: string, source: string): Promise<void>`
-  Register a JavaScript module with the runtime
+- `addBasePath(path: string): void`: Add a base path for module resolution
+- `registerModule(name: string, source: string): Promise<void>`: Register a module with the runtime
+- `registerNativeFunction(moduleName: string, functionName: string, func: Function): void`: Register a JavaScript function as a native function
+- `evaluate(code: string): any`: Evaluate JavaScript code with access to registered modules
 
-- `loadModule(specifier: string): Promise<void>`
-  Load a previously registered module
+### Module Resolution
 
-- `evaluate(code: string): any`
-  Evaluate JavaScript code with access to registered modules
+The runtime supports both relative and absolute module imports:
 
-- `registerNativeFunction(moduleName: string, functionName: string, function: Function): void`
-  Register a JavaScript function as a native function in a module
+- Relative imports start with `./` or `../` and are resolved relative to the importing module
+- Absolute imports are resolved using the configured base paths
+- If a module isn't found in base paths, it's treated as a module name
+
+Example:
+```javascript
+// Register modules
+await runtime.registerModule("math/operations", mathCode);
+await runtime.registerModule("./utils/helpers", helpersCode);
+
+// Use modules
+const result = await runtime.evaluate(`
+  import { add } from 'math/operations';  // Absolute import
+  import { format } from './utils/helpers';  // Relative import
+  
+  format(add(1, 2));
+`);
+```
 
 ## Building from Source
 
