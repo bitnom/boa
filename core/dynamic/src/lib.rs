@@ -23,32 +23,53 @@ pub use value::DynamicValue;
 #[derive(Debug, Error)]
 pub enum Error {
     /// Error occurred during module registration
-    #[error("Failed to register module: {0}")]
-    ModuleRegistration(String),
+    #[error("Failed to register module '{name}': {reason}")]
+    ModuleRegistration {
+        name: String,
+        reason: String,
+    },
 
     /// Error occurred during module loading
-    #[error("Failed to load module: {0}")]
-    ModuleLoading(String),
+    #[error("Failed to load module '{name}': {reason}")]
+    ModuleLoading {
+        name: String,
+        reason: String,
+    },
 
     /// Error occurred during JavaScript execution
-    #[error("JavaScript execution error: {0}")]
-    Execution(String),
+    #[error("JavaScript execution error in '{context}': {message}")]
+    Execution {
+        context: String,
+        message: String,
+    },
 
     /// Error occurred during type conversion
-    #[error("Type conversion error: {0}")]
-    TypeConversion(String),
+    #[error("Type conversion error: failed to convert {from} to {to} - {reason}")]
+    TypeConversion {
+        from: String,
+        to: String,
+        reason: String,
+    },
 
     /// Circular dependency detected during module loading
-    #[error("Circular module dependency detected: {0}")]
-    CircularDependency(String),
+    #[error("Circular module dependency detected: {}", dependency_chain.join(" -> "))]
+    CircularDependency {
+        dependency_chain: Vec<String>,
+    },
 
     /// Module initialization failed
-    #[error("Module initialization failed: {0}")]
-    ModuleInit(String),
+    #[error("Module '{name}' initialization failed: {reason}")]
+    ModuleInit {
+        name: String,
+        reason: String,
+    },
 
     /// Module not found
-    #[error("Module not found: {0}")]
-    ModuleNotFound(String),
+    #[error("Module '{name}' not found. Available modules: {}", available_modules.join(", "))]
+    ModuleNotFound {
+        name: String,
+        available_modules: Vec<String>,
+    },
 
     /// Concurrent modification error
     #[error("Concurrent modification error: {0}")]
@@ -60,7 +81,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Internal helper to convert JsResult to our Result type
 pub(crate) fn convert_js_error<T>(result: JsResult<T>) -> Result<T> {
-    result.map_err(|e| Error::Execution(e.to_string()))
+    result.map_err(|e| Error::Execution {
+        context: "unknown".to_string(),
+        message: e.to_string(),
+    })
 }
 
 /// Internal helper to convert lock errors to our Error type

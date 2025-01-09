@@ -58,22 +58,85 @@ impl DynamicModule {
         &self.native_functions
     }
 
-    /// Initialize the module in a context
+    /// Initialize the module with cleanup on failure
     pub fn initialize(&self, context: &mut Context) -> Result<Module> {
+        let mut guard = InitGuard::new(self.name.clone(), context);
+        
+        let result = self.do_initialize(context);
+        if result.is_ok() {
+            guard.commit();
+        }
+        
+        result
+    }
+
+    /// Async initialization support
+    pub async fn initialize_async(&self, context: &mut Context) -> Result<Module> {
+        let module = self.initialize(context)?;
+        
+        // Check for async initialization function
+        if let Ok(init_fn) = module.get_property("asyncInit", context) {
+            if init_fn.is_callable() {
+                let result = init_fn.call(&[], context)?;
+                if let Some(promise) = result.as_promise() {
+                    // Wait for async initialization to complete
+                    promise.await?;
+                }
+            }
+        }
+        
+        Ok(module)
+    }
+
+    /// Internal initialization implementation
+    fn do_initialize(&self, context: &mut Context) -> Result<Module> {
         // Parse module source
-        let source = Source::from_bytes(&self.source);
-        let module = convert_js_error(Module::parse(source, context))?;
+        let module = Module::parse(Source::from_bytes(&self.source), context)
+            .map_err(|e| Error::ModuleInit {
+                name: self.name.clone(),
+                reason: e.to_string(),
+            })?;
 
         // Register native functions
         for (name, func) in self.native_functions.iter() {
-            convert_js_error(module.set_native_function(name, func.clone(), context))?;
+            module.add_native_function(name, func.clone(), context)
+                .map_err(|e| Error::ModuleInit {
+                    name: self.name.clone(),
+                    reason: format!("Failed to register native function '{}': {}", name, e),
+                })?;
         }
 
-        // Initialize module
-        convert_js_error(module.initialize_module(context))
-            .map_err(|e| Error::ModuleInit(format!("Failed to initialize module '{}': {}", self.name, e)))?;
-
         Ok(module)
+    }
+}
+
+/// A guard to ensure proper cleanup if initialization fails
+struct InitGuard<'a> {
+    name: String,
+    context: &'a mut Context,
+    committed: bool,
+}
+
+impl<'a> InitGuard<'a> {
+    fn new(name: String, context: &'a mut Context) -> Self {
+        Self {
+            name,
+            context,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl<'a> Drop for InitGuard<'a> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Cleanup if initialization failed
+            self.context.gc();
+        }
     }
 }
 

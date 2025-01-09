@@ -1,7 +1,9 @@
 use crate::{Error, ModuleRegistry, Result, convert_js_error, convert_lock_error};
 use boa_engine::{Context, JsValue, Module, Source, NativeFunction};
 use boa_gc::{Finalize, Trace};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use futures::Future;
 
 /// An extended context that supports dynamic module loading and native function registration.
 #[derive(Debug, Clone)]
@@ -10,6 +12,8 @@ pub struct DynamicContext {
     inner: Context,
     /// Registry for dynamic modules
     registry: ModuleRegistry,
+    /// Cache for loaded modules
+    module_cache: Arc<RwLock<HashMap<String, Module>>>,
 }
 
 unsafe impl Finalize for DynamicContext {}
@@ -26,6 +30,7 @@ impl DynamicContext {
         Self {
             inner: Context::default(),
             registry: ModuleRegistry::new(),
+            module_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -34,43 +39,68 @@ impl DynamicContext {
     where
         T: crate::IntoDynamicModule,
     {
-        // Check if module is already being loaded (circular dependency)
+        // Check if module is already being loaded
         if self.registry.is_loading(name) {
-            return Err(Error::CircularDependency(name.to_string()));
+            return Err(Error::CircularDependency {
+                dependency_chain: vec![name.to_string()],
+            });
         }
 
-        module.register(self).map_err(|e| Error::ModuleRegistration(e.to_string()))
+        // Clear module from cache if it exists
+        if let Ok(mut cache) = self.module_cache.write() {
+            cache.remove(name);
+        }
+
+        module.register(self).map_err(|e| Error::ModuleRegistration {
+            name: name.to_string(),
+            reason: e.to_string(),
+        })
     }
 
-    /// Load a module at runtime
+    /// Load a module at runtime with caching
     pub async fn load_module(&mut self, specifier: &str) -> Result<Module> {
+        // Check cache first
+        if let Ok(cache) = self.module_cache.read() {
+            if let Some(module) = cache.get(specifier) {
+                return Ok(module.clone());
+            }
+        }
+
         // Check for circular dependencies
         if self.registry.is_loading(specifier) {
-            return Err(Error::CircularDependency(specifier.to_string()));
+            let mut chain = self.registry.get_loading_chain(specifier)?;
+            chain.push(specifier.to_string());
+            return Err(Error::CircularDependency {
+                dependency_chain: chain,
+            });
         }
 
         // Mark module as loading
         self.registry.mark_loading(specifier)?;
 
-        // Use drop guard to ensure we always unmark loading state
-        struct LoadGuard<'a> {
-            registry: &'a ModuleRegistry,
-            specifier: String,
-        }
+        let result = self.registry.load_module(specifier, &mut self.inner).await;
 
-        impl<'a> Drop for LoadGuard<'a> {
-            fn drop(&mut self) {
-                let _ = self.registry.unmark_loading(&self.specifier);
+        // Unmark module as loading
+        self.registry.unmark_loading(specifier)?;
+
+        // Cache successful result
+        if let Ok(ref module) = result {
+            if let Ok(mut cache) = self.module_cache.write() {
+                cache.insert(specifier.to_string(), module.clone());
             }
         }
 
-        let _guard = LoadGuard {
-            registry: &self.registry,
-            specifier: specifier.to_string(),
-        };
+        result
+    }
 
-        // Load the module
-        self.registry.load_module(specifier, &mut self.inner).await
+    /// Clear the module cache
+    pub fn clear_cache(&mut self) -> Result<()> {
+        if let Ok(mut cache) = self.module_cache.write() {
+            cache.clear();
+            Ok(())
+        } else {
+            Err(Error::ConcurrentModification("Failed to acquire cache write lock".to_string()))
+        }
     }
 
     /// Evaluate JavaScript code with access to dynamic modules
