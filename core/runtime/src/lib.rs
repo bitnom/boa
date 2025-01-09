@@ -63,9 +63,6 @@ pub use text::{TextDecoder, TextEncoder};
 
 pub mod url;
 
-pub mod bindings;
-pub use bindings::{RuntimeBindings, ModuleDefinition};
-
 /// Options used when registering all built-in objects and functions of the `WebAPI` runtime.
 #[derive(Debug)]
 pub struct RegisterOptions<L: Logger> {
