@@ -1,4 +1,4 @@
-use crate::{Error, ModuleRegistry, Result, convert_js_error, convert_lock_error};
+use crate::{Error, ModuleRegistry, Result, convert_js_error, convert_lock_error, is_valid_module_name};
 use boa_engine::{Context, JsValue, Module, Source, NativeFunction};
 use boa_gc::{Finalize, Trace};
 use std::sync::{Arc, RwLock};
@@ -40,6 +40,13 @@ impl DynamicContext {
     where
         T: crate::IntoDynamicModule,
     {
+        // Validate module name
+        if !is_valid_module_name(name) {
+            return Err(Error::InvalidModuleName {
+                name: name.to_string(),
+            });
+        }
+
         // Check if module is already being loaded
         if self.registry.is_loading(name) {
             return Err(Error::CircularDependency {
@@ -82,8 +89,8 @@ impl DynamicContext {
 
         let result = self.registry.load_module(specifier, &mut self.inner).await;
 
-        // Unmark module as loading
-        self.registry.unmark_loading(specifier)?;
+        // Always unmark module as loading, even in error case
+        let _ = self.registry.unmark_loading(specifier);
 
         // Cache successful result
         if let Ok(ref module) = result {

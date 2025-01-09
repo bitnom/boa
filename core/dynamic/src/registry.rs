@@ -49,7 +49,11 @@ impl ModuleRegistry {
         };
 
         // Resolve the module specifier
-        let resolved_specifier = self.resolver.resolve(specifier, parent_module.as_deref())?;
+        let resolved_specifier = self.resolver.resolve(specifier, parent_module.as_deref())
+            .map_err(|e| Error::ModuleResolution {
+                name: specifier.to_string(),
+                reason: e.to_string(),
+            })?;
 
         // Get the module while holding read lock
         let module = {
@@ -59,6 +63,7 @@ impl ModuleRegistry {
                 .ok_or_else(|| Error::ModuleNotFound {
                     name: specifier.to_string(),
                     available_modules: modules.keys().cloned().collect(),
+                    resolved_path: Some(resolved_specifier),
                 })?
                 .clone()
         };
@@ -68,6 +73,7 @@ impl ModuleRegistry {
             .map_err(|e| Error::ModuleLoading {
                 name: specifier.to_string(),
                 reason: e.to_string(),
+                module_source: module.source().to_string(),
             })
     }
 
@@ -146,13 +152,22 @@ impl ModuleRegistry {
 
         while let Some(module) = current {
             if !visited.insert(module.clone()) {
+                // Found a cycle - construct the dependency chain
+                let mut chain = Vec::new();
+                let mut curr = Some(specifier.to_string());
+                while let Some(m) = curr {
+                    chain.push(m.clone());
+                    if m == module {
+                        break;
+                    }
+                    curr = loading.get(&m).and_then(|parent| parent.clone());
+                }
                 return Err(Error::CircularDependency {
-                    dependency_chain: self.get_loading_chain(&module)?,
+                    dependency_chain: chain,
                 });
             }
             current = loading.get(&module).and_then(|parent| parent.clone());
         }
-
         Ok(())
     }
 }

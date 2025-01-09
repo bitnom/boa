@@ -23,29 +23,52 @@ impl ModuleResolver {
 
     /// Resolve a module specifier to a canonical path
     pub fn resolve(&self, specifier: &str, parent_specifier: Option<&str>) -> Result<String> {
+        // Normalize path separators
+        let specifier = specifier.replace('\\', "/");
+
         // If it's a relative path and we have a parent module
         if specifier.starts_with("./") || specifier.starts_with("../") {
             if let Some(parent) = parent_specifier {
-                let parent_path = Path::new(parent);
+                let parent_path = Path::new(&parent.replace('\\', "/"));
                 if let Some(parent_dir) = parent_path.parent() {
-                    let resolved = parent_dir.join(specifier);
-                    if let Ok(canonical) = resolved.canonicalize() {
-                        return Ok(canonical.to_string_lossy().into_owned());
+                    let resolved = parent_dir.join(&specifier);
+                    match resolved.canonicalize() {
+                        Ok(canonical) => return Ok(canonical.to_string_lossy()
+                            .replace('\\', "/")
+                            .into_owned()),
+                        Err(e) => return Err(Error::PathResolution {
+                            path: specifier,
+                            reason: e.to_string(),
+                        }),
                     }
                 }
             }
             return Err(Error::ModuleNotFound {
                 name: specifier.to_string(),
                 available_modules: Vec::new(),
+                reason: Some("No parent module for relative import".to_string()),
             });
         }
 
         // Try each base path
+        let mut tried_paths = Vec::new();
         for base in &self.base_paths {
-            let path = base.join(specifier);
-            if let Ok(canonical) = path.canonicalize() {
-                return Ok(canonical.to_string_lossy().into_owned());
+            let path = base.join(&specifier);
+            match path.canonicalize() {
+                Ok(canonical) => return Ok(canonical.to_string_lossy()
+                    .replace('\\', "/")
+                    .into_owned()),
+                Err(_) => tried_paths.push(path),
             }
+        }
+
+        // If no base paths worked, return error with attempted paths
+        if !self.base_paths.is_empty() {
+            return Err(Error::ModuleNotFound {
+                name: specifier.to_string(),
+                available_modules: Vec::new(),
+                reason: Some(format!("Tried paths: {:?}", tried_paths)),
+            });
         }
 
         // If it's not a path, treat it as a module name

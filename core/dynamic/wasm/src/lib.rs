@@ -11,10 +11,27 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
-/// Convert Rust errors to JavaScript errors
+/// Convert Rust errors to JavaScript errors with detailed context
 impl From<Error> for JsError {
     fn from(err: Error) -> Self {
-        JsError::new(&err.to_string())
+        match err {
+            Error::CircularDependency { dependency_chain } => {
+                JsError::new(&format!("Circular dependency detected: {}", 
+                    dependency_chain.join(" -> ")))
+            }
+            Error::ModuleNotFound { name, available_modules, reason } => {
+                let mut msg = format!("Module '{}' not found", name);
+                if !available_modules.is_empty() {
+                    msg.push_str(&format!("\nAvailable modules: {}", 
+                        available_modules.join(", ")));
+                }
+                if let Some(reason) = reason {
+                    msg.push_str(&format!("\nReason: {}", reason));
+                }
+                JsError::new(&msg)
+            }
+            _ => JsError::new(&err.to_string()),
+        }
     }
 }
 
@@ -63,7 +80,7 @@ impl DynamicRuntime {
             .map_err(Into::into)
     }
 
-    /// Register a native function
+    /// Register a native function with proper cleanup
     #[wasm_bindgen]
     pub fn register_native_function(
         &mut self,
@@ -71,16 +88,31 @@ impl DynamicRuntime {
         function_name: &str,
         function: &Function,
     ) -> Result<(), JsError> {
-        let js_function = function.clone();
+        let js_function = Arc::new(function.clone());
         
         // Create a native function that wraps the JS function
-        let native_function = move |_this: &JsValue, args: &[JsValue], _ctx: &mut boa_engine::Context| {
-            let this = JsValue::undefined();
-            let js_args = args.iter().cloned().map(Into::into).collect::<Array>();
-            
-            match js_function.apply(&this, &js_args) {
-                Ok(result) => Ok(result.into()),
-                Err(e) => Err(boa_engine::JsError::from_opaque(e.into())),
+        let native_function = {
+            let js_function = Arc::clone(&js_function);
+            move |_this: &JsValue, args: &[JsValue], _ctx: &mut boa_engine::Context| {
+                let this = JsValue::undefined();
+                let js_args = args.iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect::<Array>();
+                
+                match js_function.apply(&this, &js_args) {
+                    Ok(result) => Ok(result.into()),
+                    Err(e) => {
+                        let error = if let Some(error) = e.dyn_ref::<JsError>() {
+                            error.message().into()
+                        } else {
+                            e.as_string()
+                                .unwrap_or_else(|| "Unknown error".to_string())
+                                .into()
+                        };
+                        Err(boa_engine::JsError::from_opaque(error))
+                    }
+                }
             }
         };
 
@@ -89,7 +121,11 @@ impl DynamicRuntime {
         module.add_native_function(function_name, native_function.into());
 
         // Register the module
-        self.context.register_module(module_name, module).map_err(Into::into)
+        self.context.register_module(module_name, module)
+            .map_err(|e| JsError::new(&format!(
+                "Failed to register native function '{}' in module '{}': {}",
+                function_name, module_name, e
+            )))
     }
 
     /// Register a module with exports object
